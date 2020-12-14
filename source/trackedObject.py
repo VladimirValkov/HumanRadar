@@ -7,6 +7,8 @@ class trackedObject:
         self.x = X
         self.y = Y
         self.frames = 0
+        self.zone1 = 0
+        self.zone2 = 0
 
     def insideRadius(self, newX, newY, r=20.0) -> bool:
         formula = math.sqrt(((self.x - newX) * (self.x - newX)) + ((self.y - newY) * (self.y - newY)))
@@ -24,3 +26,9 @@ class trackedObject:
 
     def clear(self):
         self.frames = 0
+
+    def zone(self, time):
+        if self.y <= 800 / 3:
+            self.zone1 = time
+        elif self.y >= 800 / 2:
+            self.zone2 = time

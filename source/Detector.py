@@ -3,6 +3,14 @@ import tensornets as nets
 import cv2
 import numpy as np
 from trackedObject import trackedObject
+import sqlite3
+from sqlite3 import Error
+import time
+import matplotlib.pyplot as plt
+from configparser import ConfigParser
+import re
+import matplotlib.animation as animation
+from matplotlib import style
 
 tf.disable_v2_behavior()
 # make the program run with GPU and not with CPU
@@ -18,6 +26,11 @@ if gpus:
         # Memory growth must be set before GPUs have been initialized
         print(e)
 
+# setup DB
+conn = sqlite3.connect(r"E:\IT състезания\HumanRadar-Not git\humanradar.db")
+cur = conn.cursor()
+
+
 # setup YOLOV3
 inputs = tf.placeholder(tf.float32, [None, 416, 416, 3])
 model = nets.YOLOv3COCO(inputs, nets.Darknet19)
@@ -26,29 +39,100 @@ classes = {'0': 'person'}
 list_of_classes = [0]
 trackedObjects = []
 
+config = ConfigParser()
+config.read('E:\IT състезания\PeopleDetection\config.ini',"utf-8")
+path = config.get('section_a', 'path')
+radiusThreshHold = config.getfloat('section_a', 'radiusThreshHold')
+framesThreshHold = config.getint('section_a', 'framesThreshHold')
+logInterval = config.getint('section_a', 'logInterval')
 masterID = 0
 frames = 0
-radiusThreshHold = 150.0
-framesThreshHold = 25
-skipFrames = 15
-# radiusThreshHold = 10.0
-# framesThreshHold = 50
-# skipFrames = 30
+skipFrames = 0
+counter = 0
+m = int(round(time.time() * 1000))
+startDate = time.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def logDB(counter):
+    try:
+        date = time.strftime('%Y-%m-%d %H:%M:%S')
+
+
+        conn.execute(f"Insert into humanlog (log_date_time, human_counter) values ('{date}', {counter})")
+        #rows = cur.fetchall()
+
+        #for row in rows:
+        #    print(row)
+
+    except Error as e:
+        print(e)
+
+def logDB_people(dir='null'):
+    try:
+        date = time.strftime('%Y-%m-%d %H:%M:%S')
+
+        conn.execute(f"Insert into personlog (log_date_time, direction) values ('{date}', '{dir}')")
+    except Error as e:
+        print(e)
+def graph():
+    try:
+        cur.execute(f"Select * from personlog where log_date_time >= '{startDate}' and log_date_time <= '{time.strftime('%Y-%m-%d %H:%M:%S')}'")
+        rows = cur.fetchall()
+
+        xGraph = list()
+        yGraph = list()
+        value = 0
+
+        for row in rows:
+            if row[2] == 1:
+                value += 1
+            elif row[2] == 0:
+                value -= 1
+
+            xGraph.append(np.datetime64(row[1]))
+            yGraph.append(value)
+
+
+
+        plt.plot(xGraph, yGraph)
+        plt.xlabel("Time")
+        plt.ylabel("People")
+        plt.title("Graph of people traffic")
+        plt.legend()
+        plt.show()
+        plt.savefig(r'E:\IT състезания\PeopleDetection\test_output\Graph.png', dpi=None, facecolor='w', edgecolor='w',
+                    orientation='portrait', papertype=None, format='png',
+                    transparent=False, bbox_inches=None, pad_inches=0.1)
+    except Error as e:
+        print(e)
+
 
 with tf.Session() as sess:
     sess.run(model.pretrained())
-    cap = cv2.VideoCapture(r"E:\IT състезания\PeopleDetection\test_input\0001-1547.mp4")  # setup the video
+    cap = cv2.VideoCapture(path)  # setup the video
     #cap = cv2.VideoCapture(r"E:\Download\0001-1547.mp4")  # setup the video
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     skipFrames = fps
     print(fps)
     while (cap.isOpened()):  # start looping through the video frame by frame
+        millis = int(round(time.time() * 1000))
+        if millis - m >= logInterval:
+            logDB(counter)
+            counter = 0
+            m = millis
         # resizing the frame
         ret, frame = cap.read()
         frames += 1
         for tObj in trackedObjects:
             tObj.count()
+            tObj.zone(time.time() * 1000)
             if tObj.frames >= framesThreshHold:
+                if tObj.zone1 != 0 and tObj.zone2 != 0:
+                    if tObj.zone1 - tObj.zone2 > 0:
+                        direction = 1 #up
+                    else:
+                        direction = 0 #down
+                    logDB_people(direction)
                 trackedObjects.remove(tObj)
 
         if frame is None:
@@ -74,8 +158,9 @@ with tf.Session() as sess:
                     box = boxes[j][i]
                     x = box[0]
                     y = box[1]
+                    confidence = box[4]
 
-                    if box[4] >= 0.5:
+                    if confidence >= 0.5:
                         count += 1
                         # print(str(len(boxes[j])) + ":" + str(len(trackedObjects)))
                         tempTracked = None
@@ -88,6 +173,7 @@ with tf.Session() as sess:
 
                         if tempTracked is None and frames % skipFrames == 0:
                             masterID += 1
+                            counter += 1
                             tempTracked = trackedObject(x, y, masterID)
                             trackedObjects.append(tempTracked)
 
@@ -108,7 +194,15 @@ with tf.Session() as sess:
             output.write(cv2.resize(img, (1024, 768)))
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
+        elif cv2.waitKey(1) & 0xFF == ord('r'):
+            conn.commit()
+            graph()
 
 cap.release()
-output.release()
+if conn:
+    conn.commit()
+    graph()
+    conn.close()
+if output != None:
+    output.release()
 cv2.destroyAllWindows()
